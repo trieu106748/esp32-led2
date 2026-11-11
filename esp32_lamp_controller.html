@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Điều Khiển Đèn LED ESP32 via MQTT</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- MQTT.js -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        
+        /* Hiệu ứng bóng đèn phát sáng */
+        .bulb-glow {
+            filter: drop-shadow(0 0 25px rgba(250, 204, 21, 0.9)) drop-shadow(0 0 50px rgba(250, 204, 21, 0.6));
+        }
+
+        /* Custom Scrollbar cho Log Console */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(71, 85, 105, 1);
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center p-4 md:p-8">
+
+    <div class="max-w-4xl w-full flex flex-col gap-6">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center bg-slate-900/80 backdrop-blur border border-slate-800 p-5 rounded-2xl shadow-xl">
+            <div class="flex items-center gap-3 mb-3 md:mb-0">
+                <div class="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20 text-amber-400">
+                    <i class="fa-solid fa-microchip text-2xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-white tracking-wide">ESP32 Smart Controller</h1>
+                    <p class="text-xs text-slate-400">Điều khiển LED qua MQTT WebSocket (EMQX Broker)</p>
+                </div>
+            </div>
+            
+            <!-- Connection Badge -->
+            <div id="statusBadge" class="flex items-center gap-2 px-4 py-2 rounded-full bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-400">
+                <span id="statusDot" class="w-2.5 h-2.5 rounded-full bg-slate-500 animate-pulse"></span>
+                <span id="statusText">Đang ngắt kết nối</span>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Lamp Control Dashboard (Left/Top) -->
+            <div class="lg:col-span-7 bg-slate-900/80 backdrop-blur border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col items-center justify-between min-h-[420px]">
+                
+                <div class="w-full flex justify-between items-center border-b border-slate-800 pb-3">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Trạng Thái Thiết Bị</span>
+                    <span id="ledStateText" class="text-xs font-bold px-3 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700">TẮT</span>
+                </div>
+
+                <!-- Glowing Light Bulb Visualization -->
+                <div class="my-8 flex flex-col items-center justify-center">
+                    <div id="bulbContainer" class="relative transition-all duration-500 ease-in-out transform hover:scale-105">
+                        <i id="bulbIcon" class="fa-solid fa-lightbulb text-9xl text-slate-700 transition-all duration-500"></i>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="w-full grid grid-cols-2 gap-4">
+                    <button id="btnOn" onclick="sendLedCommand('on')" disabled class="py-4 px-6 rounded-xl font-bold flex items-center justify-center gap-2 transition-all duration-200 bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-emerald-900/30">
+                        <i class="fa-solid fa-power-off"></i>
+                        BẬT ĐÈN
+                    </button>
+                    <button id="btnOff" onclick="sendLedCommand('off')" disabled class="py-4 px-6 rounded-xl font-bold flex items-center justify-center gap-2 transition-all duration-200 bg-rose-600/20 text-rose-400 border border-rose-500/30 hover:bg-rose-600 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-rose-900/30">
+                        <i class="fa-solid fa-circle-xmark"></i>
+                        TẮT ĐÈN
+                    </button>
+                </div>
+            </div>
+
+            <!-- Configuration & Console Logs (Right/Bottom) -->
+            <div class="lg:col-span-5 flex flex-col gap-6">
+                
+                <!-- Settings Drawer / Config -->
+                <div class="bg-slate-900/80 backdrop-blur border border-slate-800 p-5 rounded-2xl shadow-xl">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-sliders text-amber-400"></i> Cấu Hình Kết Nối
+                        </h2>
+                        <button onclick="toggleConfigPanel()" class="text-slate-400 hover:text-white text-xs underline">Ẩn / Hiện</button>
+                    </div>
+
+                    <form id="configForm" class="space-y-3 text-xs">
+                        <div>
+                            <label class="block text-slate-400 mb-1">Host & Port (WSS/WS)</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="cfgHost" value="s1a21d21.ala.asia-southeast1.emqxsl.com" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 w-2/3 focus:outline-none focus:border-amber-500">
+                                <input type="number" id="cfgPort" value="8084" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 w-1/3 focus:outline-none focus:border-amber-500">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-slate-400 mb-1">MQTT Username</label>
+                                <input type="text" id="cfgUser" value="hanvantrieu" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 w-full focus:outline-none focus:border-amber-500">
+                            </div>
+                            <div>
+                                <label class="block text-slate-400 mb-1">MQTT Password</label>
+                                <input type="password" id="cfgPass" value="Hanvantrieu" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 w-full focus:outline-none focus:border-amber-500">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-slate-400 mb-1">Control Topic</label>
+                            <input type="text" id="cfgTopic" value="esp32/lamp" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 w-full focus:outline-none focus:border-amber-500">
+                        </div>
+
+                        <button type="button" onclick="connectMQTT()" class="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold py-2 rounded-lg transition mt-2 flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-plug"></i> Kết Nối Lại
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Live Log Console -->
+                <div class="bg-slate-900/80 backdrop-blur border border-slate-800 p-5 rounded-2xl shadow-xl flex-1 flex flex-col">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                            <i class="fa-solid fa-terminal text-emerald-400"></i> Nhật Ký Hoạt Động
+                        </h2>
+                        <button onclick="clearLogs()" class="text-xs text-slate-500 hover:text-slate-300">
+                            <i class="fa-solid fa-trash"></i> Xóa log
+                        </button>
+                    </div>
+                    
+                    <div id="logConsole" class="bg-slate-950 border border-slate-800/80 rounded-xl p-3 h-48 font-mono text-xs text-slate-300 overflow-y-auto custom-scrollbar flex flex-col gap-1.5">
+                        <div class="text-slate-500">[System] Đang khởi tạo ứng dụng...</div>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- Footer Info -->
+        <footer class="text-center text-xs text-slate-600 py-2">
+            Arduino ESP32 MQTT Controller &copy; 2026 - Powered by MQTT.js & EMQX
+        </footer>
+
+    </div>
+
+    <!-- Application Script -->
+    <script>
+        let client = null;
+        let isConnected = false;
+
+        // Cập nhật log ra giao diện
+        function log(message, type = 'info') {
+            const consoleEl = document.getElementById('logConsole');
+            const time = new Date().toLocaleTimeString();
+            let colorClass = 'text-slate-300';
+            
+            if (type === 'success') colorClass = 'text-emerald-400';
+            if (type === 'error') colorClass = 'text-rose-400';
+            if (type === 'warning') colorClass = 'text-amber-400';
+            if (type === 'sent') colorClass = 'text-sky-400';
+
+            const logItem = document.createElement('div');
+            logItem.className = `${colorClass} leading-relaxed break-all`;
+            logItem.innerHTML = `<span class="text-slate-600">[${time}]</span> ${message}`;
+            
+            consoleEl.appendChild(logItem);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logConsole').innerHTML = '';
+            log('Đã xóa nhật ký.', 'info');
+        }
+
+        function updateUIState(connected) {
+            isConnected = connected;
+            const statusBadge = document.getElementById('statusBadge');
+            const statusDot = document.getElementById('statusDot');
+            const statusText = document.getElementById('statusText');
+            const btnOn = document.getElementById('btnOn');
+            const btnOff = document.getElementById('btnOff');
+
+            if (connected) {
+                statusBadge.className = "flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-xs font-semibold text-emerald-400";
+                statusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse";
+                statusText.innerText = "Đã kết nối Broker";
+                btnOn.disabled = false;
+                btnOff.disabled = false;
+            } else {
+                statusBadge.className = "flex items-center gap-2 px-4 py-2 rounded-full bg-rose-500/10 border border-rose-500/30 text-xs font-semibold text-rose-400";
+                statusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500";
+                statusText.innerText = "Ngắt kết nối";
+                btnOn.disabled = true;
+                btnOff.disabled = true;
+            }
+        }
+
+        function setBulbState(state) {
+            const bulbIcon = document.getElementById('bulbIcon');
+            const bulbContainer = document.getElementById('bulbContainer');
+            const ledStateText = document.getElementById('ledStateText');
+
+            if (state === 'on') {
+                bulbIcon.className = "fa-solid fa-lightbulb text-9xl text-amber-400 transition-all duration-500 bulb-glow";
+                ledStateText.className = "text-xs font-bold px-3 py-1 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40";
+                ledStateText.innerText = "ĐANG BẬT (ON)";
+            } else {
+                bulbIcon.className = "fa-solid fa-lightbulb text-9xl text-slate-700 transition-all duration-500";
+                ledStateText.className = "text-xs font-bold px-3 py-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700";
+                ledStateText.innerText = "ĐÃ TẮT (OFF)";
+            }
+        }
+
+        function connectMQTT() {
+            const host = document.getElementById('cfgHost').value.trim();
+            const port = document.getElementById('cfgPort').value.trim();
+            const username = document.getElementById('cfgUser').value.trim();
+            const password = document.getElementById('cfgPass').value.trim();
+            const topic = document.getElementById('cfgTopic').value.trim();
+
+            if (client) {
+                log('Đang đóng kết nối cũ...', 'warning');
+                client.end();
+            }
+
+            // Tạo đường dẫn WSS hoặc WS tùy cổng
+            const protocol = port === '8084' ? 'wss' : 'ws';
+            const connectUrl = `${protocol}://${host}:${port}/mqtt`;
+
+            log(`Đang kết nối tới ${connectUrl}...`, 'info');
+            updateUIState(false);
+
+            const options = {
+                clean: true,
+                connectTimeout: 5000,
+                clientId: 'WebController_' + Math.random().toString(16).substring(2, 8),
+                username: username,
+                password: password,
+            };
+
+            try {
+                client = mqtt.connect(connectUrl, options);
+
+                client.on('connect', () => {
+                    log('Kết nối MQTT Broker thành công!', 'success');
+                    updateUIState(true);
+
+                    // Subscribe topic để lắng nghe phản hồi
+                    client.subscribe(topic, (err) => {
+                        if (!err) {
+                            log(`Đã đăng ký (Subscribe) topic: ${topic}`, 'success');
+                        } else {
+                            log(`Lỗi đăng ký topic: ${err.message}`, 'error');
+                        }
+                    });
+                });
+
+                client.on('message', (receivedTopic, payload) => {
+                    const msgString = payload.toString();
+                    log(`Nhận [${receivedTopic}]: ${msgString}`, 'info');
+
+                    try {
+                        const data = JSON.parse(msgString);
+                        if (data.led) {
+                            setBulbState(data.led);
+                        }
+                    } catch (e) {
+                        // Không phải định dạng JSON tiêu chuẩn
+                    }
+                });
+
+                client.on('error', (err) => {
+                    log(`Lỗi kết nối: ${err.message || 'Không thể truy cập Broker'}`, 'error');
+                    updateUIState(false);
+                });
+
+                client.on('close', () => {
+                    log('Đã ngắt kết nối với Broker.', 'warning');
+                    updateUIState(false);
+                });
+
+            } catch (err) {
+                log(`Lỗi khởi tạo MQTT client: ${err.message}`, 'error');
+            }
+        }
+
+        function sendLedCommand(state) {
+            if (!client || !isConnected) {
+                log('Chưa kết nối tới MQTT Broker!', 'error');
+                return;
+            }
+
+            const topic = document.getElementById('cfgTopic').value.trim();
+            const payload = JSON.stringify({ "led": state });
+
+            client.publish(topic, payload, { qos: 0, retain: false }, (err) => {
+                if (!err) {
+                    log(`Đã gửi [${topic}]: ${payload}`, 'sent');
+                    setBulbState(state);
+                } else {
+                    log(`Lỗi khi gửi lệnh: ${err.message}`, 'error');
+                }
+            });
+        }
+
+        function toggleConfigPanel() {
+            const form = document.getElementById('configForm');
+            form.classList.toggle('hidden');
+        }
+
+        // Khởi chạy kết nối khi tải xong trang
+        window.onload = () => {
+            connectMQTT();
+        };
+    </script>
+</body>
+</html>
